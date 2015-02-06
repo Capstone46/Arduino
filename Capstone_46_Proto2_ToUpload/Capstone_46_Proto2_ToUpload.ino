@@ -9,9 +9,14 @@
  * problems since 13 512 byte buffers will be used.
  *
  * Data is written to the file using a SD multiple block write command.
- */
- 
- /*===========================================DEFINITIONS===========================================*/
+
+
+
+MATLAB CODE to make Altimeter data low pass:
+plot(filtfilt(fir1(500,0.001),1,AltimeterDataVector));
+*/
+
+/*===========================================DEFINITIONS===========================================*/
 #include <SdFat.h>
 #include <SdFatUtil.h>
 #include <Wire.h>
@@ -56,14 +61,10 @@ int TimeDateGlobal[7];
 //These variables will be used to hold the x,y and z axis accelerometer values.
 int x,y,z,s,a,t = 0;
 
-//Random stuff that probably will go away eventually
+//Recording or Converting to CSV. Will go away eventually
 int currentState = 1;
-int fakeMin = 0;
-double fakeSec = 0;
+//Counter to update RTC value every once in a while (less than a second, of course)
 int timeUpdateCounter = 0;
-int watchMicro;
-int blinkCount =1;
-int waitcycle;
 
 // Maximum file size in blocks.
 // The program creates a contiguous file with FILE_BLOCK_COUNT 512 byte blocks.
@@ -157,15 +158,13 @@ void acquireData(data_t* data) {
   y = (int)((word)values[3]<<8)|(word)values[2];
   ////The Z value is stored in values[4] and values[5].
   z = (int)((word)values[5]<<8)|(word)values[4];
-  
+
   s = abs(x)+abs(y)+abs(z);
 
+  if(timeUpdateCounter == 0) UpdateTimeDate(TimeDateGlobal);
   timeUpdateCounter++;
-  if(timeUpdateCounter >= RTC_UPDATE_INTERVAL){
-    UpdateTimeDate(TimeDateGlobal);
-    timeUpdateCounter = 0;      
-  }
-
+  if(timeUpdateCounter >= RTC_UPDATE_INTERVAL) timeUpdateCounter = 0;   
+  
   data->adc[0] = TimeDateGlobal[6];
   data->adc[1] = TimeDateGlobal[5];
   data->adc[2] = TimeDateGlobal[4]; 
@@ -566,11 +565,11 @@ void logData() {
       }
     }
   }
-      
+
   if (!sd.card()->writeStop()) {
     error("writeStop failed");
   }
-    
+
   // Truncate file if recording stopped early.
   if (bn != FILE_BLOCK_COUNT) {    
     Serial.println(F("Truncating file"));
@@ -578,11 +577,11 @@ void logData() {
       error("Can't truncate file");
     }
   }
-    
+
   if (!binFile.rename(sd.vwd(), binName)) {
     error("Can't rename file");
   }
-    
+
   Serial.print(F("File renamed: "));
   Serial.println(binName);
   Serial.print(F("Max block write usec: "));
@@ -611,81 +610,6 @@ int RTC_init(){
   SPI.transfer(0x60); //60= disable Osciallator and Battery SQ wave @1hz, temp compensation, Alarms disabled
   digitalWrite(chipSelectRTC, HIGH);
   delay(10);
-}
-/*=================SET RTC FUNCTION===============*/
-int SetTimeDate(int d, int mo, int y, int h, int mi, int s){ 
-  int TimeDate [7]={
-    s,mi,h,0,d,mo,y  };
-  for(int i=0; i<=6;i++){
-    if(i==3)
-      i++;
-    int b= TimeDate[i]/10;
-    int a= TimeDate[i]-b*10;
-    if(i==2){
-      if (b==2)
-        b=B00000010;
-      else if (b==1)
-        b=B00000001;
-    }	
-    TimeDate[i]= a+(b<<4);
-
-    digitalWrite(chipSelectRTC, LOW);
-    SPI.transfer(i+0x80); 
-    SPI.transfer(TimeDate[i]);        
-    digitalWrite(chipSelectRTC, HIGH);
-  }
-}
-/*==========READ RTC AS STRING============*/
-String ReadTimeDate(){
-
-  SPI.setDataMode(SPI_MODE3);
-  String temp;
-  int TimeDate [7]; //second,minute,hour,null,day,month,year		
-  for(int i=0; i<=6;i++){
-    if(i==3)
-      i++;
-    digitalWrite(chipSelectRTC, LOW);
-    SPI.transfer(i+0x00); 
-    unsigned int n = SPI.transfer(0x00);        
-    digitalWrite(chipSelectRTC, HIGH);
-    int a=n & B00001111;    
-    if(i==2){	
-      int b=(n & B00110000)>>4; //24 hour mode
-      if(b==B00000010)
-        b=20;        
-      else if(b==B00000001)
-        b=10;
-      TimeDate[i]=a+b;
-    }
-    else if(i==4){
-      int b=(n & B00110000)>>4;
-      TimeDate[i]=a+b*10;
-    }
-    else if(i==5){
-      int b=(n & B00010000)>>4;
-      TimeDate[i]=a+b*10;
-    }
-    else if(i==6){
-      int b=(n & B11110000)>>4;
-      TimeDate[i]=a+b*10;
-    }
-    else{	
-      int b=(n & B01110000)>>4;
-      TimeDate[i]=a+b*10;	
-    }
-  }
-  temp.concat(TimeDate[4]);
-  temp.concat("/") ;
-  temp.concat(TimeDate[5]);
-  temp.concat("/") ;
-  temp.concat(TimeDate[6]);
-  temp.concat("     ") ;
-  temp.concat(TimeDate[2]);
-  temp.concat(":") ;
-  temp.concat(TimeDate[1]);
-  temp.concat(":") ;
-  temp.concat(TimeDate[0]);
-  return(temp);
 }
 
 /*=================READ TIME DATE TO ARRAY===========*/
@@ -735,8 +659,7 @@ void pauseForButton(){
   }
   while(1){
     if(digitalRead(buttonPin) == LOW) break;
-    if(currentState == 1) blinkMyLedGreen();
-    if(currentState == 2) blinkMyLedRed();
+    if(currentState == 1 ) blinkMyLedGreen();
   }
   while(1){
     if(digitalRead(buttonPin) ==  HIGH) break;
@@ -747,18 +670,55 @@ void pauseForButton(){
 /*=======LED BLINK FUNCTIONS====*/
 void blinkMyLedGreen(){
   digitalWrite(ledPin,LOW);
-  delay(50);
+  if(currentState == 1) delay(100);
   digitalWrite(ledPin,HIGH);
-  delay(50);
+  if(currentState == 1) delay(100);
 }
 
-void blinkMyLedRed(){
-  digitalWrite(ERROR_LED_PIN,LOW);
-  digitalWrite(ledPin,LOW);
-  delay(50);
-  digitalWrite(ERROR_LED_PIN,HIGH);
-  digitalWrite(ledPin,HIGH);
-  delay(50);
+
+/*==========SERIAL COMMUNIATION THING (usually commented out)========*/
+
+void SerialCommunication(){  
+  // discard any input
+  while (Serial.read() >= 0) {
+  }
+  Serial.println();
+  Serial.println(F("type:"));
+  Serial.println(F("c - convert file to CSV")); 
+  Serial.println(F("d - dump data to Serial"));  
+  Serial.println(F("e - overrun error details"));
+  Serial.println(F("r - record data"));
+
+  while(!Serial.available()) {
+  }
+  char c = tolower(Serial.read());
+
+  // Discard extra Serial data.
+  do {
+    delay(10);
+  } 
+  while (Serial.read() >= 0);
+
+  if (ERROR_LED_PIN >= 0) {
+    digitalWrite(ERROR_LED_PIN, HIGH);
+  }
+  if (c == 'c') {
+    binaryToCsv();
+  } 
+  else if (c == 'd') {
+    dumpData();
+  } 
+  else if (c == 'e') {    
+    checkOverrun();
+  } 
+  else if (c == 'r') {
+    UpdateTimeDate(TimeDateGlobal);
+    logData();
+    binaryToCsv();
+  } 
+  else {
+    Serial.println(F("Invalid entry"));
+  }
 }
 
 /*==========================================SETUP===================================================*/
@@ -769,8 +729,6 @@ void setup(void) {
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(ledPin,OUTPUT);
-
-  watchMicro = micros();
 
   //my setup stuff
   pinMode(13, OUTPUT);
@@ -825,51 +783,20 @@ void setup(void) {
 void loop(void) {
 
   digitalWrite(ERROR_LED_PIN, HIGH);
-  digitalWrite(ledPin,HIGH);
   UpdateTimeDate(TimeDateGlobal);
 
-  /*
-  // discard any input
-   while (Serial.read() >= 0) {}
-   Serial.println();
-   Serial.println(F("type:"));
-   Serial.println(F("c - convert file to CSV")); 
-   Serial.println(F("d - dump data to Serial"));  
-   Serial.println(F("e - overrun error details"));
-   Serial.println(F("r - record data"));
-   
-   while(!Serial.available()) {}
-   char c = tolower(Serial.read());
-   
-   // Discard extra Serial data.
-   do {
-   delay(10);
-   } while (Serial.read() >= 0);
-   
-   if (ERROR_LED_PIN >= 0) {
-   digitalWrite(ERROR_LED_PIN, HIGH);
-   }
-   if (c == 'c') {
-   binaryToCsv();
-   } else if (c == 'd') {
-   dumpData();
-   } else if (c == 'e') {    
-   checkOverrun();
-   } else if (c == 'r') {
-   UpdateTimeDate(TimeDateGlobal);
-   logData();
-   binaryToCsv();
-   } else {
-   Serial.println(F("Invalid entry"));
-   }*/
+  //SerialCommunination();
 
+  digitalWrite(ledPin,LOW);
+  currentState = 0;
+  pauseForButton();
+  digitalWrite(ledPin,HIGH);
+  logData();
+  binaryToCsv();
   currentState = 1;
   pauseForButton();
-  logData();
-  currentState = 2;
-  pauseForButton();
-  binaryToCsv();
 }
+
 
 
 

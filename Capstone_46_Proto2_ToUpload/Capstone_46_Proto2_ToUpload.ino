@@ -23,12 +23,14 @@ plot(filtfilt(fir1(500,0.001),1,AltimeterDataVector));
 #include <SPI.h>
 #include "MPL3115A2.h"
 #include "UserDataType.h"
+#include <MemoryFree.h>
 
 #define SD_CS_PIN 9
 #define chipSelectADXL 10
 #define chipSelectRTC 8
 #define ledPin 7
 #define buttonPin 6
+#define interruptPin 3
 #define RTC_UPDATE_INTERVAL 50
 #define SERIAL_DUMP 0
 #define LOG_INTERVAL_USEC 10000
@@ -39,21 +41,37 @@ MPL3115A2 myPressure;
 // Digital pin to indicate an error, set to -1 if not used.
 // The led blinks for fatal errors. The led goes on solid for SD write
 // overrun errors and logging continues.
-const int8_t ERROR_LED_PIN = 5;
+#define ERROR_LED_PIN 5
 
 //This is a list of some of the registers available on the ADXL345.
 //To learn more about these and the rest of the registers on the ADXL345, read the datasheet!
-char POWER_CTL = 0x2D;	//Power Control Register
-char DATA_FORMAT = 0x31;
-char DATAX0 = 0x32;	//X-Axis Data 0
-char DATAX1 = 0x33;	//X-Axis Data 1
-char DATAY0 = 0x34;	//Y-Axis Data 0
-char DATAY1 = 0x35;	//Y-Axis Data 1
-char DATAZ0 = 0x36;	//Z-Axis Data 0
-char DATAZ1 = 0x37;	//Z-Axis Data 1
+#define POWER_CTL 0x2D	//Power Control Register
+#define DATA_FORMAT 0x31
+#define DATAX0 0x32	//X-Axis Data 0
+#define DATAX1 0x33	//X-Axis Data 1
+#define DATAY0 0x34	//Y-Axis Data 0
+#define DATAY1 0x35	//Y-Axis Data 1
+#define DATAZ0 0x36	//Z-Axis Data 0
+#define DATAZ1 0x37	//Z-Axis Data 1
+#define INT_MAP 0x2F    //map to tell to send to INT1 or INT2
+#define INT_ENABLE 0x2E //D7-D0: DATA_READY, SINGLE_TAP, DOUBLE_TAP, Activity, Inactivity, FREE_FALL, Watermark, Overrun
+#define INT_SOURCE 0x30 //read to clear interrupt
+#define THRESH_ACT 0x24 //unsigned 8bit magnitude of threshold
+#define ACT_INACT_CTL 0x027
+#define THRESH_FF 0x28 //unsigned rootsumsquare of all axes!!!try 0x09 to start
+#define TIME_FF 0x29 //unsigned time, try 0x14 (100ms) or 350ms (0x46)
+
+#define HIGHER_TH 0x10
+#define HIGH_TH 0x09
+#define MEDIUM_TH 0x08
+#define LOW_TH 0x07
+
 
 //This buffer will hold values read from the ADXL345 registers.
 byte values[10];
+
+//Loop counter for not to write to SD
+byte reduceSDwriteCount;
 
 //Time and Date Array
 int TimeDateGlobal[7]; 
@@ -148,6 +166,21 @@ void acquireData(data_t* data) {
   //a = data->adc[0];
   SPI.setDataMode(SPI_MODE3);
 
+  //if(digitalRead(interruptPin)){
+     
+  //  digitalWrite(ledPin,LOW);
+  //  delay(500);
+  //  digitalWrite(ledPin,HIGH);
+  //  delay(500);
+  //  digitalWrite(ledPin,LOW);
+  //  delay(500);
+  //   digitalWrite(ledPin,HIGH);
+  //   delay(500);
+  //}
+  
+  data->adc[11] = digitalRead(interruptPin);
+  //clear interrupts (for now)
+  readRegister(INT_SOURCE, 1, values);
   //readRegister(DATAX0, 6, values);
   readRegister(DATAX0, 6, values);
 
@@ -179,6 +212,44 @@ void acquireData(data_t* data) {
   data->adc[10] = z;
 }
 
+/*======AQUIRE A DATA RECORD======*/
+void fakeacquireData(data_t* data) {
+ 
+  delay(2000);
+  
+  //readRegister(INT_SOURCE, 1, &dummy);
+  
+}
+
+
+/*======CHECK DATA ======*/
+void checkData() {
+  
+  a = myPressure.readAltitudeFt();
+  //t = myPressure.readTemp();
+  //a = data->adc[0];
+  SPI.setDataMode(SPI_MODE3);
+
+  //readRegister(DATAX0, 6, values);
+  readRegister(DATAX0, 6, values);
+
+  ////The ADXL345 gives 10-bit acceleration values, but they are stored as bytes (8-bits). To get the full value, two bytes must be combined for each axis.
+  ////The X value is stored in values[0] and values[1].
+  x = (int)((word)values[1]<<8)|(word)values[0];
+  ////The Y value is stored in values[2] and values[3].
+  y = (int)((word)values[3]<<8)|(word)values[2];
+  ////The Z value is stored in values[4] and values[5].
+  z = (int)((word)values[5]<<8)|(word)values[4];
+
+  s = abs(x)+abs(y)+abs(z);
+
+  if(timeUpdateCounter == 0) UpdateTimeDate(TimeDateGlobal);
+  timeUpdateCounter++;
+  if(timeUpdateCounter >= RTC_UPDATE_INTERVAL) timeUpdateCounter = 0;   
+  
+}
+
+
 /*========PRINT A DATA RECORD=========*/
 void printData(Print* pr, data_t* data) {
   pr->print(data->adc[0]);
@@ -202,6 +273,7 @@ void printHeader(Print* pr) {
   pr->print(F("x-axis, "));
   pr->print(F("y-axis, "));
   pr->print(F("z-axis, "));
+  pr->print(F("INT1, "));
   pr->println();
 }
 
@@ -520,7 +592,32 @@ void logData() {
         overrun++;
       } 
       else {
+        
+        //for(reduceSDwriteCount = 0;reduceSDwriteCount < 100;reduceSDwriteCount++){
+        //  checkData();
+        //}
+       
         acquireData(&curBlock->data[curBlock->count++]);
+        
+        //fakeacquireData(&curBlock->data[curBlock->count++]);
+       
+         //while(1){
+           
+           //digitalWrite(ledPin,LOW);
+           //delay(500);
+           //digitalWrite(ledPin,HIGH);
+           //delay(1000); 
+           
+           //delay(3000);
+           //checkData();
+           
+         //}
+       
+            //Serial.print("freeMemory()=");
+            //Serial.println(freeMemory());
+
+            //delay(1000);
+       
 
         if (curBlock->count == DATA_DIM) {
           fullQueue[fullHead] = curBlock;
@@ -729,7 +826,8 @@ void setup(void) {
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(ledPin,OUTPUT);
-
+  pinMode(interruptPin, INPUT_PULLUP);
+ 
   //my setup stuff
   pinMode(13, OUTPUT);
   Wire.begin();        // Join i2c bus
@@ -755,6 +853,18 @@ void setup(void) {
   writeRegister(DATA_FORMAT, 0x02);
   ////Put the ADXL345 into Measurement Mode by writing 0x08 to the POWER_CTL register.
   writeRegister(POWER_CTL, 0x08);  //Measurement mode  
+  ////Set interrupts to all go to INT1
+  writeRegister(INT_MAP,0x00);
+  //D7-D0: DATA_READY, SINGLE_TAP, DOUBLE_TAP, Activity, Inactivity, FREE_FALL, Watermark, Overrun
+  writeRegister(INT_ENABLE, 0x04); //enable freefall
+  //unsigned rootsumsquare of all axes!!!try 0x09 to start
+  writeRegister(THRESH_FF, MEDIUM_TH); //HIGH_TH, MEDIUM_TH, LOW_TH, HIGHER_TH
+  //unsigned time, try 0x14 (100ms) or 350ms (0x46)
+  writeRegister(TIME_FF, 0x14);
+  //clear interrupts
+  readRegister(INT_SOURCE, 1, values);
+
+
 
   //offsets to fix werid issuess
   writeRegister(0x1E, 0x01);

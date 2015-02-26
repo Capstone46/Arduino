@@ -1,4 +1,4 @@
-# Arduino
+# Group 46
 
 UBC 2015 EECE Capstone Group 46 - Fall Datalogger
 

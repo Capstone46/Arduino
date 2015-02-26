@@ -23,14 +23,18 @@ plot(filtfilt(fir1(500,0.001),1,AltimeterDataVector));
 #include <SPI.h>
 #include "MPL3115A2.h"
 #include "UserDataType.h"
-#include <MemoryFree.h>
+//#include <MemoryFree.h>
+#include <avr/sleep.h>
+#include <avr/power.h>
 
 #define SD_CS_PIN 9
 #define chipSelectADXL 10
 #define chipSelectRTC 8
 #define ledPin 7
+#define SDpowerPin 4
 #define buttonPin 6
 #define interruptPin 3
+#define buttoninterruptPin 2
 #define RTC_UPDATE_INTERVAL 50
 #define SERIAL_DUMP 0
 #define LOG_INTERVAL_USEC 10000
@@ -79,6 +83,12 @@ int TimeDateGlobal[7];
 //These variables will be used to hold the x,y and z axis accelerometer values.
 int x,y,z,s,a,t = 0;
 
+//for sleep mode testing
+int seconds = 0;
+byte spi_save;
+int awakeTimer = 0;
+
+
 //Recording or Converting to CSV. Will go away eventually
 int currentState = 1;
 //Counter to update RTC value every once in a while (less than a second, of course)
@@ -126,6 +136,8 @@ const uint8_t BASE_NAME_SIZE = sizeof(FILE_BASE_NAME) - 1;
 
 SdFat sd;
 SdBaseFile binFile;
+Sd2Card card;
+SdVolume vol;
 
 char binName[13] = FILE_BASE_NAME "00.BIN";
 
@@ -160,12 +172,14 @@ inline uint8_t queueNext(uint8_t ht) {
 /*==========================================FUNCTION DEFINITIONS==========================================*/
 /*======AQUIRE A DATA RECORD======*/
 void acquireData(data_t* data) {
+  
   data->time = micros();
   a = myPressure.readAltitudeFt();
   //t = myPressure.readTemp();
   //a = data->adc[0];
+  
   SPI.setDataMode(SPI_MODE3);
-
+  
   //if(digitalRead(interruptPin)){
      
   //  digitalWrite(ledPin,LOW);
@@ -177,9 +191,8 @@ void acquireData(data_t* data) {
   //   digitalWrite(ledPin,HIGH);
   //   delay(500);
   //}
-  
+    
   data->adc[11] = digitalRead(interruptPin);
-  //clear interrupts (for now)
   readRegister(INT_SOURCE, 1, values);
   //readRegister(DATAX0, 6, values);
   readRegister(DATAX0, 6, values);
@@ -210,6 +223,16 @@ void acquireData(data_t* data) {
   data->adc[8] = x;
   data->adc[9] = y;
   data->adc[10] = z;
+  
+if(awakeTimer >= 300) {
+    Serial.println("gone to sleep ");
+    enterSleep();
+    Serial.println("back awake ");
+    awakeTimer = 0;
+    timeUpdateCounter = 0;
+}
+  awakeTimer++;
+   
 }
 
 /*======AQUIRE A DATA RECORD======*/
@@ -277,6 +300,92 @@ void printHeader(Print* pr) {
   pr->println();
 }
 
+/*===================SLEEP MODE SSTUFF===============*/
+void enterSleep(void)
+{
+  
+  readRegister(INT_SOURCE, 1, values);
+  readRegister(DATAX0, 6, values);
+        
+  //if (card.init(SPI_FULL_SPEED,SD_CS_PIN)) {
+  // Serial.println("cardinit ");
+  //}
+
+  //if (vol.init(&card)) {
+  //  Serial.println("volinit ");
+  //}      
+        
+        
+  /* Setup pin2 as an interrupt and attach handler. */
+  attachInterrupt(1, interruptRoutine, LOW);
+  attachInterrupt(0, interruptRoutine, LOW);
+  delay(100);  
+        
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+      
+  sleep_enable();
+        
+     
+          
+ spi_save = SPCR;
+ SPCR = 0;
+ 
+ SPI.end();
+ //pinMode(13,INPUT_PULLUP);
+ //pinMode(12,INPUT_PULLUP);
+ //pinMode(11,INPUT_PULLUP);
+ 
+ // digitalWrite(13,LOW);
+  
+  
+  digitalWrite(SDpowerPin,LOW);     
+  power_adc_disable();
+  power_spi_disable();
+  power_timer0_disable();
+  power_timer1_disable();
+  power_timer2_disable();
+  power_twi_disable();         
+          
+  sleep_mode();
+  
+  /* The program will continue from here. */
+  
+  /* First thing to do is disable sleep. */
+  //sleep_disable(); 
+  
+    
+  power_all_enable();
+    
+  SPI.begin();
+  
+  SPCR = spi_save;  
+  
+  digitalWrite(SDpowerPin,HIGH);
+  //if (!sd.begin(SD_CS_PIN, SPI_FULL_SPEED)) {
+  //  sd.initErrorPrint();
+  //  fatalBlink();
+  //}
+  
+  
+}
+
+
+void interruptRoutine(void)
+{
+   /* This will bring us back from sleep. */
+  
+  /* We detach the interrupt to stop it from 
+   * continuously firing while the interrupt pin
+   * is low.
+   */
+  detachInterrupt(1);
+  detachInterrupt(0);
+  sleep_disable();
+   
+}
+
+
+
 //==================ADXL FUNCTIONS==================*/
 //This function will write a value to a register on the ADXL345.
 //Parameters:
@@ -322,7 +431,7 @@ void readRegister(char registerAddress, int numBytes, byte * values){
 #define error(msg) error_P(PSTR(msg))
 //------------------------------------------------------------------------------
 void error_P(const char* msg) {
-  sd.errorPrint_P(msg);
+  //sd.errorPrint_P(msg);
   fatalBlink();
 }
 //------------------------------------------------------------------------------
@@ -439,7 +548,7 @@ void checkOverrun() {
     Serial.println(F("Done"));
   }
 }
-/*=============DUMB DATA TO SERIAL=============*/
+/*=============DUMP DATA TO SERIAL=============*/
 // dump data file to Serial
 void dumpData() {
   block_t block;
@@ -482,6 +591,7 @@ void logData() {
     error("FILE_BASE_NAME too long");
   }
   while (sd.exists(binName)) {
+    delay(10);
     if (binName[BASE_NAME_SIZE + 1] != '9') {
       binName[BASE_NAME_SIZE + 1]++;
     } 
@@ -520,6 +630,7 @@ void logData() {
   uint32_t bgnErase = bgnBlock;
   uint32_t endErase;
   while (bgnErase < endBlock) {
+    delay(10);
     endErase = bgnErase + ERASE_SIZE;
     if (endErase > endBlock) endErase = endBlock;
     if (!sd.card()->erase(bgnErase, endErase)) {
@@ -541,6 +652,7 @@ void logData() {
 
   // Put rest of buffers in the empty queue.
   for (uint8_t i = 0; i < BUFFER_BLOCK_COUNT; i++) {
+    delay(10);
     emptyQueue[emptyHead] = &block[i];
     emptyHead = queueNext(emptyHead);
   }
@@ -597,6 +709,7 @@ void logData() {
         //  checkData();
         //}
        
+        
         acquireData(&curBlock->data[curBlock->count++]);
         
         //fakeacquireData(&curBlock->data[curBlock->count++]);
@@ -826,8 +939,12 @@ void setup(void) {
 
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(ledPin,OUTPUT);
+  pinMode(SDpowerPin,OUTPUT);
   pinMode(interruptPin, INPUT_PULLUP);
+  pinMode(buttoninterruptPin, INPUT);
  
+  digitalWrite(SDpowerPin,HIGH);
+  
   //my setup stuff
   pinMode(13, OUTPUT);
   Wire.begin();        // Join i2c bus
@@ -858,7 +975,7 @@ void setup(void) {
   //D7-D0: DATA_READY, SINGLE_TAP, DOUBLE_TAP, Activity, Inactivity, FREE_FALL, Watermark, Overrun
   writeRegister(INT_ENABLE, 0x04); //enable freefall
   //unsigned rootsumsquare of all axes!!!try 0x09 to start
-  writeRegister(THRESH_FF, MEDIUM_TH); //HIGH_TH, MEDIUM_TH, LOW_TH, HIGHER_TH
+  writeRegister(THRESH_FF, HIGH_TH); //HIGH_TH, MEDIUM_TH, LOW_TH, HIGHER_TH
   //unsigned time, try 0x14 (100ms) or 350ms (0x46)
   writeRegister(TIME_FF, 0x14);
   //clear interrupts
@@ -880,18 +997,30 @@ void setup(void) {
   Serial.print(F("Records/block: "));
   Serial.println(DATA_DIM);
 
+  //if (!sd.init(SPI_FULL_SPEED, SD_CS_PIN)) {
+  //  sd.initErrorHalt();
+  //}  
+
+
   if (sizeof(block_t) != 512) error("Invalid block size");
   // initialize file system.
   if (!sd.begin(SD_CS_PIN, SPI_FULL_SPEED)) {
     sd.initErrorPrint();
     fatalBlink();
   }
+  
+
+
 
 }
 
 /*========================================MAIN LOOP==================================*/
 void loop(void) {
 
+  
+  
+  
+  
   digitalWrite(ERROR_LED_PIN, HIGH);
   UpdateTimeDate(TimeDateGlobal);
 
@@ -905,6 +1034,24 @@ void loop(void) {
   binaryToCsv();
   currentState = 1;
   pauseForButton();
+ 
+
+  /*
+  delay(1000);
+  seconds++;
+  
+  Serial.print("Awake for ");
+  Serial.print(seconds, DEC);
+  Serial.println(" second");
+  
+  if(seconds == 3)
+  {
+    Serial.println("Entering sleep");
+    delay(200);
+    seconds = 0;
+    enterSleep();
+  }
+  */
 }
 
 

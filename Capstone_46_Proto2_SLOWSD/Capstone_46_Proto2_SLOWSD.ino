@@ -255,7 +255,8 @@ void logData() {
     // looks to see if the button is pressed to STOP recording
     // works in conjunction with the buttonpress interrupt basically
     // it will probably reach here before you can take your finger off the button
-    if(digitalRead(buttonPin) == LOW) closeFile = true; 
+    //if(digitalRead(buttonPin) == LOW) closeFile = true; 
+    if(digitalRead(buttoninterruptPin) == LOW) closeFile = true; 
     
   }
 }
@@ -387,14 +388,17 @@ void UpdateTimeDate(int* TimeDateLocal){
 // wait for button press
 void pauseForButton(){
   while(1){
-    if(digitalRead(buttonPin) ==  HIGH) break;
+  // if(digitalRead(buttonPin) ==  HIGH) break;
+    if(digitalRead(buttoninterruptPin) ==  HIGH) break;
   }
   while(1){
-    if(digitalRead(buttonPin) == LOW) break;
+  // if(digitalRead(buttonPin) == LOW) break;
+    if(digitalRead(buttoninterruptPin) == LOW) break;
     if(currentState == 1 ) blinkMyLedGreen();
   }
   while(1){
-    if(digitalRead(buttonPin) ==  HIGH) break;
+    // if(digitalRead(buttonPin) ==  HIGH) break;
+    if(digitalRead(buttoninterruptPin) ==  HIGH) break;
   }
 }
 
@@ -410,10 +414,10 @@ void blinkMyLedGreen(){
 /*==========================================SETUP===================================================*/
 void setup(void) {
   // set all pins to proper i/o mode
-  pinMode(buttonPin, INPUT_PULLUP);
+  //pinMode(buttonPin, INPUT_PULLUP);
   pinMode(ledPin,OUTPUT);
   pinMode(interruptPin, INPUT_PULLUP);
-  pinMode(buttoninterruptPin, INPUT);
+  pinMode(buttoninterruptPin, INPUT_PULLUP);
 
   // I2C initialization
   pinMode(13, OUTPUT);
